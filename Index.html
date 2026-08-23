@@ -241,17 +241,19 @@
 
     document.getElementById('fecha').addEventListener('change', cargarHorarios);
     document.getElementById('sucursal').addEventListener('change', cargarHorarios);
+    document.getElementById('servicio').addEventListener('change', cargarHorarios);
 
     function cargarHorarios() {
       const fecha = document.getElementById('fecha').value;
       const sucursal = document.getElementById('sucursal').value;
+      const servicio = document.getElementById('servicio').value;
       const cont = document.getElementById('slots');
       const hint = document.getElementById('slotsHint');
       horaSeleccionada = null;
       actualizarBotonEnvio();
       cont.innerHTML = '';
-      if (!fecha || !sucursal) {
-        hint.textContent = 'Elige sucursal y fecha para ver los horarios disponibles.';
+      if (!fecha || !sucursal || !servicio) {
+        hint.textContent = 'Elige servicio, sucursal y fecha para ver los horarios disponibles.';
         return;
       }
 
@@ -282,7 +284,7 @@
         .withFailureHandler(function (err) {
           hint.textContent = 'No se pudo cargar el horario: ' + err.message;
         })
-        .getHorariosDisponibles(fecha, sucursal);
+        .getHorariosDisponibles(fecha, sucursal, servicio);
     }
 
     function actualizarBotonEnvio() {
