@@ -61,6 +61,7 @@ const NUM_COLS = 12;
 
 const SHEET_SERVICIOS = 'Servicios';
 const SHEET_USUARIOS = 'Usuarios';
+const SHEET_DISPONIBILIDAD = 'Disponibilidad';
 
 // Cambia esto por cualquier texto propio antes de crear usuarios — es un
 // ingrediente extra para las contraseñas guardadas, no hace falta
@@ -112,6 +113,7 @@ function configurarHojas() {
 
   crearHojaServicios_(ss);
   crearHojaUsuarios_(ss);
+  crearHojaDisponibilidad_(ss);
 
   avisar_(
     'Listo. Ahora completa la pestaña "Config" con los datos de tu centro, ' +
@@ -145,6 +147,22 @@ function crearHojaUsuarios_(ss) {
   ]);
   hoja.setFrozenRows(1);
   hoja.autoResizeColumns(1, 5);
+  return hoja;
+}
+
+// Horarios que un profesional (o el admin, a nombre de un profesional)
+// abrió a mano para que los pacientes puedan reservarlos. Sin una fila
+// acá, ese horario NO aparece disponible — el sistema es "cerrado por
+// defecto, se abre a mano" (ver getHorariosDisponibles más abajo).
+function crearHojaDisponibilidad_(ss) {
+  let hoja = ss.getSheetByName(SHEET_DISPONIBILIDAD);
+  if (hoja) return hoja;
+  hoja = ss.insertSheet(SHEET_DISPONIBILIDAD);
+  hoja.getRange(1, 1, 1, 6).setValues([
+    ['Fecha', 'Hora', 'Sucursal', 'Profesional', 'Abierto por', 'Marca temporal']
+  ]);
+  hoja.setFrozenRows(1);
+  hoja.autoResizeColumns(1, 6);
   return hoja;
 }
 
@@ -185,12 +203,22 @@ function configurarDashboard() {
 
   crearHojaServicios_(ss);
   crearHojaUsuarios_(ss);
+  crearHojaDisponibilidad_(ss);
 
   avisar_(
     'Listo: se agregó la pestaña "Servicios" (revisa que el Rol de cada uno sea correcto), ' +
-    'la pestaña "Usuarios" (vacía) y las columnas "Profesional"/"Nota" en Reservas. ' +
+    'la pestaña "Usuarios" (vacía), la pestaña "Disponibilidad" y las columnas "Profesional"/"Nota" en Reservas. ' +
     'Ahora crea cada cuenta con la función crearUsuario() — instrucciones en SETUP.md.'
   );
+}
+
+// Agrega solo la pestaña "Disponibilidad" a un proyecto que YA tiene el
+// dashboard funcionando (configurarDashboard ya corrida antes). Ejecútala
+// una sola vez para pasar del modelo viejo (todo abierto, se bloquea) al
+// nuevo (todo cerrado, se abre a mano).
+function agregarHojaDisponibilidad() {
+  crearHojaDisponibilidad_(getSpreadsheet_());
+  avisar_('Listo: se agregó la pestaña "Disponibilidad". Ahora rosi y kin deben abrir sus horarios desde el dashboard antes de que los pacientes puedan reservarlos.');
 }
 
 // Crea o actualiza un usuario del dashboard. Ejecútala UNA VEZ POR CADA
@@ -221,6 +249,35 @@ function crearUsuario() {
   }
 
   avisar_(`Listo: usuario "${usuario}" (${rol}) guardado/actualizado.`);
+}
+
+// Crea de una vez las cuentas iniciales del dashboard. Pensada para
+// correrla UNA sola vez al instalar; después de eso, usa crearUsuario()
+// para agregar o cambiar cuentas de a una.
+function crearUsuariosIniciales() {
+  const cuentas = [
+    { usuario: 'rosi', password: '123456789', rol: 'nutricionista', nombre: 'Rosi' },
+    { usuario: 'kin', password: '123456789', rol: 'kinesiologo', nombre: 'kine' },
+    { usuario: 'root', password: '123456789', rol: 'admin', nombre: 'admin' },
+  ];
+
+  const hoja = crearHojaUsuarios_(getSpreadsheet_());
+  const filas = hoja.getLastRow() > 1
+    ? hoja.getRange(2, 1, hoja.getLastRow() - 1, 1).getValues().map(r => r[0])
+    : [];
+
+  cuentas.forEach(c => {
+    const hash = hashPassword_(c.usuario, c.password);
+    const idx = filas.indexOf(c.usuario);
+    if (idx === -1) {
+      hoja.appendRow([c.usuario, hash, c.rol, c.nombre, 'Sí']);
+      filas.push(c.usuario);
+    } else {
+      hoja.getRange(idx + 2, 1, 1, 5).setValues([[c.usuario, hash, c.rol, c.nombre, 'Sí']]);
+    }
+  });
+
+  avisar_('Listo: usuarios rosi, kin y root creados/actualizados.');
 }
 
 function hashPassword_(usuario, password) {
@@ -372,39 +429,63 @@ function getRolServicio_(servicio) {
   return fila ? fila[1] : '';
 }
 
+// Lista de horas "de plantilla" del día (09:00, 09:45, 10:30...) según
+// la duración de cita y el rango horaInicio–horaTermino de Config. Es
+// solo la grilla de referencia que usa el dashboard para ofrecer horas
+// al abrir agenda — NO implica que esas horas ya estén disponibles.
+function getHorasBase_(cfg) {
+  const slots = [];
+  const [hi, mi] = cfg.horaInicio.split(':').map(Number);
+  const [ht, mt] = cfg.horaTermino.split(':').map(Number);
+  let cursor = hi * 60 + mi;
+  const fin = ht * 60 + mt;
+  while (cursor < fin) {
+    const hh = Math.floor(cursor / 60), mm = cursor % 60;
+    slots.push(('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2));
+    cursor += cfg.duracionMin;
+  }
+  return slots;
+}
+
+// Horas que el profesional (o el admin a su nombre) abrió a mano para
+// esa fecha/sucursal — ver hoja "Disponibilidad".
+function getHorasAbiertas_(fechaStr, sucursal, rol) {
+  const sheet = getSpreadsheet_().getSheetByName(SHEET_DISPONIBILIDAD);
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  return data
+    .filter(row => row[0] === fechaStr && row[2] === sucursal && row[3] === rol)
+    .map(row => row[1]);
+}
+
 // Acepta como tercer parámetro un nombre de servicio (lo normal, desde el
 // formulario de pacientes) O directamente un rol (lo que usa el
-// dashboard al bloquear horarios). Si no encuentra el servicio en la
+// dashboard al abrir/cerrar horarios). Si no encuentra el servicio en la
 // hoja "Servicios", asume que ya le pasaron el rol tal cual.
+//
+// Modelo "cerrado por defecto": un horario solo aparece disponible si
+// alguien lo abrió antes a mano (hoja "Disponibilidad") y todavía no
+// tiene una reserva encima.
 function getHorariosDisponibles(fechaStr, sucursal, servicioORol) {
   const rol = getRolServicio_(servicioORol) || servicioORol || '';
   const cfg = getConfigMap_();
   const fecha = new Date(fechaStr + 'T00:00:00');
-  const diaSemana = fecha.getDay();
-
-  if (cfg.diasAtencion.indexOf(diaSemana) === -1) return [];
 
   const hoy = new Date();
   const limite = new Date();
   limite.setDate(hoy.getDate() + cfg.diasAnticipacion);
   if (fecha < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()) || fecha > limite) return [];
 
-  const slots = [];
-  const [hi, mi] = cfg.horaInicio.split(':').map(Number);
-  const [ht, mt] = cfg.horaTermino.split(':').map(Number);
-  let cursor = new Date(fecha); cursor.setHours(hi, mi, 0, 0);
-  const fin = new Date(fecha); fin.setHours(ht, mt, 0, 0);
-
-  while (cursor < fin) {
-    slots.push(Utilities.formatDate(cursor, cfg.zona, 'HH:mm'));
-    cursor = new Date(cursor.getTime() + cfg.duracionMin * 60000);
-  }
+  const abiertas = getHorasAbiertas_(fechaStr, sucursal, rol);
+  if (!abiertas.length) return [];
 
   const ocupadas = getHorasOcupadas_(fechaStr, sucursal, rol);
   const ahora = new Date();
   const esHoy = fechaStr === Utilities.formatDate(ahora, cfg.zona, 'yyyy-MM-dd');
 
-  return slots.filter(h => {
+  return abiertas.filter(h => {
     if (ocupadas.indexOf(h) !== -1) return false;
     if (esHoy) {
       const [hh, mm] = h.split(':').map(Number);
@@ -412,7 +493,7 @@ function getHorariosDisponibles(fechaStr, sucursal, servicioORol) {
       if (slotTime <= ahora) return false;
     }
     return true;
-  });
+  }).sort();
 }
 
 function getHorasOcupadas_(fechaStr, sucursal, rol) {
@@ -611,40 +692,223 @@ function guardarNota(token, fila, nota) {
   return { ok: true };
 }
 
-// El profesional bloquea un horario propio (ej. vacaciones, hora
-// personal) para que no aparezca disponible en el formulario de
-// pacientes. Reutiliza la misma hoja de Reservas.
-function bloquearHorario(token, datos) {
+// Mueve una reserva existente a otra fecha/hora, verificando que el
+// nuevo horario esté disponible. Pensada sobre todo para el panel de
+// administración ("Agenda general"), pero cualquiera que pueda editar
+// la fila puede usarla.
+function reagendarReserva(token, fila, nuevaFecha, nuevaHora) {
   const sesion = validarToken_(token);
   if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-  if (sesion.rol === 'admin') throw new Error('Inicia sesión con la cuenta del profesional para bloquear su agenda.');
-
-  if (!datos.fecha || !datos.hora || !datos.sucursal) {
-    throw new Error('Faltan datos para bloquear el horario.');
-  }
+  if (!puedeEditarFila_(sesion, fila)) throw new Error('No tienes permiso para editar esta hora.');
+  if (!nuevaFecha || !nuevaHora) throw new Error('Falta la nueva fecha u hora.');
 
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    const disponibles = getHorariosDisponibles(datos.fecha, datos.sucursal, sesion.rol);
-    if (disponibles.indexOf(datos.hora) === -1) {
-      throw new Error('Ese horario ya no está disponible (puede que ya tengas una hora agendada ahí).');
+    const sheet = getSpreadsheet_().getSheetByName(SHEET_RESERVAS);
+    const filaActual = sheet.getRange(fila, 1, 1, NUM_COLS).getValues()[0];
+    if (filaActual[COL.ESTADO - 1] === 'Cancelada') {
+      throw new Error('Esta hora está cancelada; no se puede reagendar.');
     }
 
-    getSpreadsheet_().getSheetByName(SHEET_RESERVAS).appendRow([
-      new Date(), '(Bloqueado)', '', '', '(Bloqueo de agenda)',
-      datos.fecha, datos.hora, 'Bloqueado', 'No', datos.sucursal,
-      sesion.rol, datos.motivo || ''
-    ]);
+    const sucursal = filaActual[COL.SUCURSAL - 1];
+    const profesional = filaActual[COL.PROFESIONAL - 1];
+    const mismoHorario = nuevaFecha === filaActual[COL.FECHA - 1] && nuevaHora === filaActual[COL.HORA - 1];
 
-    return { ok: true, mensaje: 'Horario bloqueado.' };
+    if (!mismoHorario) {
+      const disponibles = getHorariosDisponibles(nuevaFecha, sucursal, profesional);
+      if (disponibles.indexOf(nuevaHora) === -1) {
+        throw new Error('Ese nuevo horario no está disponible (revisa que esté abierto y libre).');
+      }
+    }
+
+    sheet.getRange(fila, COL.FECHA).setValue(nuevaFecha);
+    sheet.getRange(fila, COL.HORA).setValue(nuevaHora);
+    return { ok: true, mensaje: 'Hora reagendada.' };
   } finally {
     lock.releaseLock();
   }
 }
 
-// Libera un horario bloqueado antes marcándolo como Cancelada — el
-// resto del sistema ya trata "Cancelada" como horario libre.
-function liberarBloqueo(token, fila) {
-  return actualizarEstado(token, fila, 'Cancelada');
+// ============================================================
+// 8. ABRIR / CERRAR AGENDA (modelo "cerrado por defecto")
+// ============================================================
+
+function rolProfesionalValido_(rol) {
+  return rol === 'nutricionista' || rol === 'kinesiologo';
+}
+
+// El profesional gestiona su propia agenda. El admin puede gestionar la
+// de cualquiera, pero debe indicar explícitamente para cuál (datos.rol).
+function resolverRolObjetivo_(sesion, datos) {
+  if (sesion.rol === 'admin') {
+    if (!rolProfesionalValido_(datos && datos.rol)) {
+      throw new Error('Indica para qué profesional (nutricionista o kinesiologo).');
+    }
+    return datos.rol;
+  }
+  if (!rolProfesionalValido_(sesion.rol)) {
+    throw new Error('Esta cuenta no gestiona una agenda de profesional.');
+  }
+  return sesion.rol;
+}
+
+function validarFechaGestionable_(cfg, fechaStr) {
+  const fecha = new Date(fechaStr + 'T00:00:00');
+  const hoy = new Date();
+  const limite = new Date();
+  limite.setDate(hoy.getDate() + cfg.diasAnticipacion);
+  if (fecha < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate())) {
+    throw new Error('No puedes abrir o cerrar una fecha pasada.');
+  }
+  if (fecha > limite) {
+    throw new Error('Esa fecha está más allá de los días de anticipación permitidos (revisa Config).');
+  }
+}
+
+// Datos para pintar el dashboard: sucursales, y si es admin, la lista de
+// profesionales (para elegir de quién gestionar la agenda).
+function getInfoDashboard(token) {
+  const sesion = validarToken_(token);
+  if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  const cfg = getConfigMap_();
+
+  const info = { rol: sesion.rol, nombre: sesion.nombre, sucursales: cfg.sucursales };
+
+  if (sesion.rol === 'admin') {
+    const hoja = getSpreadsheet_().getSheetByName(SHEET_USUARIOS);
+    const lastRow = hoja.getLastRow();
+    const vistos = {};
+    const profesionales = [];
+    if (lastRow >= 2) {
+      hoja.getRange(2, 1, lastRow - 1, 5).getValues().forEach(row => {
+        const [ , , rol, nombre, activo] = row;
+        if (rolProfesionalValido_(rol) && activo !== 'No' && !vistos[rol]) {
+          vistos[rol] = true;
+          profesionales.push({ rol, nombre });
+        }
+      });
+    }
+    info.profesionales = profesionales;
+  }
+
+  return info;
+}
+
+// Estado de una fecha/sucursal/profesional para la grilla de "Abrir
+// agenda": qué horas base hay, cuáles están abiertas y cuáles ya tienen
+// una reserva encima.
+function getEstadoDia(token, datos) {
+  const sesion = validarToken_(token);
+  if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  const rol = resolverRolObjetivo_(sesion, datos);
+  if (!datos || !datos.fecha || !datos.sucursal) throw new Error('Faltan datos.');
+
+  const cfg = getConfigMap_();
+  return {
+    horasBase: getHorasBase_(cfg),
+    abiertas: getHorasAbiertas_(datos.fecha, datos.sucursal, rol),
+    ocupadas: getHorasOcupadas_(datos.fecha, datos.sucursal, rol)
+  };
+}
+
+// Abre un horario puntual para que los pacientes puedan reservarlo.
+function abrirHorario(token, datos) {
+  const sesion = validarToken_(token);
+  if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  const rol = resolverRolObjetivo_(sesion, datos);
+
+  if (!datos.fecha || !datos.hora || !datos.sucursal) {
+    throw new Error('Faltan datos para abrir el horario.');
+  }
+
+  const cfg = getConfigMap_();
+  validarFechaGestionable_(cfg, datos.fecha);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, rol);
+    if (yaAbiertas.indexOf(datos.hora) !== -1) {
+      return { ok: true, mensaje: 'Ese horario ya estaba abierto.' };
+    }
+
+    crearHojaDisponibilidad_(getSpreadsheet_()).appendRow([
+      datos.fecha, datos.hora, datos.sucursal, rol, sesion.usuario, new Date()
+    ]);
+
+    return { ok: true, mensaje: 'Horario abierto.' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Abre de una vez todas las horas base del día (útil para no tener que
+// abrir hora por hora en un día normal de atención).
+function abrirDiaCompleto(token, datos) {
+  const sesion = validarToken_(token);
+  if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  const rol = resolverRolObjetivo_(sesion, datos);
+
+  if (!datos.fecha || !datos.sucursal) throw new Error('Faltan datos.');
+
+  const cfg = getConfigMap_();
+  validarFechaGestionable_(cfg, datos.fecha);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const base = getHorasBase_(cfg);
+    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, rol);
+    const nuevas = base.filter(h => yaAbiertas.indexOf(h) === -1);
+
+    if (!nuevas.length) {
+      return { ok: true, mensaje: 'Ese día ya estaba completamente abierto.', abiertos: 0 };
+    }
+
+    const sheet = crearHojaDisponibilidad_(getSpreadsheet_());
+    const filas = nuevas.map(h => [datos.fecha, h, datos.sucursal, rol, sesion.usuario, new Date()]);
+    sheet.getRange(sheet.getLastRow() + 1, 1, filas.length, 6).setValues(filas);
+
+    return { ok: true, mensaje: 'Se abrieron ' + nuevas.length + ' horarios.', abiertos: nuevas.length };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Cierra un horario que estaba abierto (si nadie lo reservó todavía).
+function cerrarHorario(token, datos) {
+  const sesion = validarToken_(token);
+  if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
+  const rol = resolverRolObjetivo_(sesion, datos);
+
+  if (!datos.fecha || !datos.hora || !datos.sucursal) {
+    throw new Error('Faltan datos para cerrar el horario.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(15000);
+  try {
+    const ocupadas = getHorasOcupadas_(datos.fecha, datos.sucursal, rol);
+    if (ocupadas.indexOf(datos.hora) !== -1) {
+      throw new Error('Ese horario ya tiene una reserva — cancélala primero desde "Mis horas" o "Agenda general".');
+    }
+
+    const sheet = getSpreadsheet_().getSheetByName(SHEET_DISPONIBILIDAD);
+    const lastRow = sheet ? sheet.getLastRow() : 0;
+    if (lastRow >= 2) {
+      const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+      for (let i = data.length - 1; i >= 0; i--) {
+        if (data[i][0] === datos.fecha && data[i][1] === datos.hora &&
+            data[i][2] === datos.sucursal && data[i][3] === rol) {
+          sheet.deleteRow(i + 2);
+          return { ok: true, mensaje: 'Horario cerrado.' };
+        }
+      }
+    }
+
+    return { ok: true, mensaje: 'Ese horario ya estaba cerrado.' };
+  } finally {
+    lock.releaseLock();
+  }
 }

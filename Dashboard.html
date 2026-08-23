@@ -162,6 +162,15 @@
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
 
+    /* ---------- Filtros (panel admin) ---------- */
+    .filtros {
+      display: none;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .filtros select { width: auto; min-width: 190px; }
+
     /* ---------- Reservas list ---------- */
     .reserva-card {
       background: var(--card);
@@ -245,6 +254,25 @@
     }
     .reserva-acciones button.ok:hover { border-color: var(--ok-ink); color: var(--ok-ink); }
     .reserva-acciones button.danger:hover { border-color: var(--err-ink); color: var(--err-ink); }
+    .reagendar-form {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .reagendar-form input { width: auto; flex: 1; min-width: 130px; }
+    .reagendar-form button {
+      flex: none;
+      font-size: 12.5px;
+      font-weight: 600;
+      padding: 7px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      background: var(--paper);
+      color: var(--ink-soft);
+    }
+    .reagendar-form button:hover { border-color: var(--berry); color: var(--berry); }
     .vacio {
       text-align: center;
       padding: 40px 20px;
@@ -252,8 +280,8 @@
       font-size: 14px;
     }
 
-    /* ---------- Bloquear horario ---------- */
-    .bloquear-form {
+    /* ---------- Abrir agenda ---------- */
+    .abrir-form {
       max-width: 420px;
       background: var(--card);
       border: 1px solid var(--rule);
@@ -262,7 +290,7 @@
     }
     .slots {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
       gap: 8px;
       margin-top: 8px;
     }
@@ -275,8 +303,17 @@
       color: var(--ink);
     }
     .slot-btn:hover { border-color: var(--berry); }
-    .slot-btn.selected { background: var(--berry); border-color: var(--berry); color: #fff; }
+    .slot-btn.abierto { background: var(--ok-ink); border-color: var(--ok-ink); color: #fff; }
+    .slot-btn.abierto:hover { opacity: .85; border-color: var(--ok-ink); }
+    .slot-btn.reservado {
+      background: var(--muted-bg);
+      color: var(--muted-ink);
+      border-color: var(--rule);
+      cursor: default;
+    }
+    .slot-btn.reservado:hover { border-color: var(--rule); }
     .hint { font-size: 12.5px; color: var(--ink-soft); margin-top: 8px; }
+    #abrirDiaBtn { margin-top: 16px; }
   </style>
 </head>
 <body>
@@ -305,31 +342,37 @@
 
     <main>
       <div class="tabs">
-        <button class="tab-btn active" data-tab="horas">Mis horas</button>
-        <button class="tab-btn" data-tab="bloquear" id="tabBloquearBtn">Bloquear horario</button>
+        <button class="tab-btn active" data-tab="horas" id="tabHorasBtn">Mis horas</button>
+        <button class="tab-btn" data-tab="abrir" id="tabAbrirBtn">Abrir agenda</button>
       </div>
 
       <section class="tab-panel active" id="panelHoras">
+        <div class="filtros" id="filtrosAdmin">
+          <select id="filtroProfesional"><option value="">Todos los profesionales</option></select>
+          <select id="filtroSucursal"><option value="">Todas las sucursales</option></select>
+        </div>
         <div id="listaReservas"></div>
       </section>
 
-      <section class="tab-panel" id="panelBloquear">
-        <div class="bloquear-form">
-          <label for="bSucursal">Sucursal</label>
-          <select id="bSucursal" required><option value="">Cargando...</option></select>
+      <section class="tab-panel" id="panelAbrir">
+        <div class="abrir-form">
+          <div id="abrirProfesionalWrap" style="display:none;">
+            <label for="aProfesional">Profesional</label>
+            <select id="aProfesional"><option value="">Selecciona profesional</option></select>
+          </div>
 
-          <label for="bFecha">Fecha</label>
-          <input type="date" id="bFecha" required>
+          <label for="aSucursal">Sucursal</label>
+          <select id="aSucursal" required><option value="">Cargando...</option></select>
 
-          <label>Horario</label>
-          <div class="slots" id="bSlots"></div>
-          <div class="hint" id="bHint">Elige sucursal y fecha para ver horarios.</div>
+          <label for="aFecha">Fecha</label>
+          <input type="date" id="aFecha" required>
 
-          <label for="bMotivo">Motivo (opcional)</label>
-          <input type="text" id="bMotivo" placeholder="Ej: vacaciones, hora personal">
+          <button type="button" class="primary" id="abrirDiaBtn">Abrir todo el día</button>
 
-          <button type="button" class="primary" id="bloquearBtn" disabled>Bloquear horario</button>
-          <div class="msg" id="bMsg"></div>
+          <label style="margin-top:18px;">Horarios</label>
+          <div class="slots" id="aSlots"></div>
+          <div class="hint" id="aHint">Elige sucursal y fecha para ver los horarios.</div>
+          <div class="msg" id="aMsg"></div>
         </div>
       </section>
     </main>
@@ -339,7 +382,7 @@
     let TOKEN = sessionStorage.getItem('nr_token') || null;
     let ROL = sessionStorage.getItem('nr_rol') || null;
     let NOMBRE = sessionStorage.getItem('nr_nombre') || null;
-    let horaBloqueoSeleccionada = null;
+    let filasCache = [];
 
     if (TOKEN) mostrarApp();
 
@@ -388,7 +431,7 @@
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
-        document.getElementById(btn.dataset.tab === 'horas' ? 'panelHoras' : 'panelBloquear').classList.add('active');
+        document.getElementById(btn.dataset.tab === 'horas' ? 'panelHoras' : 'panelAbrir').classList.add('active');
       });
     });
 
@@ -399,11 +442,11 @@
       document.getElementById('whoRol').textContent = '(' + ROL + ')';
 
       if (ROL === 'admin') {
-        document.getElementById('tabBloquearBtn').style.display = 'none';
+        document.getElementById('tabHorasBtn').textContent = 'Agenda general';
       }
 
       cargarReservas();
-      cargarSucursalesBloqueo();
+      cargarInfoDashboard();
     }
 
     function manejarSesionExpirada_(err) {
@@ -415,7 +458,39 @@
       return false;
     }
 
-    // ---------- Mis horas ----------
+    // ---------- Info general (sucursales, profesionales si es admin) ----------
+
+    function cargarInfoDashboard() {
+      google.script.run
+        .withSuccessHandler(function (info) {
+          const selSuc = document.getElementById('aSucursal');
+          selSuc.innerHTML = '<option value="">Selecciona una sucursal</option>' +
+            info.sucursales.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+          document.getElementById('aFecha').min = new Date().toISOString().slice(0, 10);
+
+          if (ROL === 'admin') {
+            document.getElementById('abrirProfesionalWrap').style.display = 'block';
+
+            const selProf = document.getElementById('aProfesional');
+            selProf.innerHTML = '<option value="">Selecciona profesional</option>' +
+              (info.profesionales || []).map(p => '<option value="' + p.rol + '">' + p.nombre + ' (' + p.rol + ')</option>').join('');
+
+            const filtroProf = document.getElementById('filtroProfesional');
+            filtroProf.innerHTML = '<option value="">Todos los profesionales</option>' +
+              (info.profesionales || []).map(p => '<option value="' + p.rol + '">' + p.nombre + '</option>').join('');
+
+            const filtroSuc = document.getElementById('filtroSucursal');
+            filtroSuc.innerHTML = '<option value="">Todas las sucursales</option>' +
+              info.sucursales.map(s => '<option value="' + s + '">' + s + '</option>').join('');
+
+            document.getElementById('filtrosAdmin').style.display = 'flex';
+          }
+        })
+        .withFailureHandler(function (err) { manejarSesionExpirada_(err); })
+        .getInfoDashboard(TOKEN);
+    }
+
+    // ---------- Mis horas / Agenda general ----------
 
     function cargarReservas() {
       const cont = document.getElementById('listaReservas');
@@ -423,7 +498,8 @@
 
       google.script.run
         .withSuccessHandler(function (res) {
-          pintarReservas(res.filas);
+          filasCache = res.filas;
+          pintarReservasFiltradas();
         })
         .withFailureHandler(function (err) {
           if (manejarSesionExpirada_(err)) return;
@@ -432,12 +508,23 @@
         .getMisReservas(TOKEN);
     }
 
+    function pintarReservasFiltradas() {
+      let filas = filasCache;
+      if (ROL === 'admin') {
+        const prof = document.getElementById('filtroProfesional').value;
+        const suc = document.getElementById('filtroSucursal').value;
+        if (prof) filas = filas.filter(r => r.profesional === prof);
+        if (suc) filas = filas.filter(r => r.sucursal === suc);
+      }
+      pintarReservas(filas);
+    }
+
     function pintarReservas(filas) {
       const cont = document.getElementById('listaReservas');
       cont.innerHTML = '';
 
       if (!filas.length) {
-        cont.innerHTML = '<p class="vacio">No tienes horas agendadas.</p>';
+        cont.innerHTML = '<p class="vacio">No hay horas que mostrar.</p>';
         return;
       }
 
@@ -454,11 +541,12 @@
             <div class="reserva-acciones">
               <button class="ok" data-accion="Atendida">Marcar atendida</button>
               <button class="danger" data-accion="Cancelada">Cancelar</button>
+              ${ROL === 'admin' ? '<button data-accion="reagendar-toggle">Reagendar</button>' : ''}
             </div>`;
         } else if (esBloqueo) {
           accionesHtml = `
             <div class="reserva-acciones">
-              <button class="ok" data-accion="liberar">Liberar horario</button>
+              <button class="ok" data-accion="Cancelada">Liberar horario</button>
             </div>`;
         }
 
@@ -466,6 +554,13 @@
           <div class="reserva-nota">
             <input type="text" value="${(r.nota || '').replace(/"/g, '&quot;')}" placeholder="Agregar nota..." data-nota-input>
             <button data-accion="nota">Guardar</button>
+          </div>` : '';
+
+        const reagendarHtml = (ROL === 'admin' && r.estado === 'Confirmada') ? `
+          <div class="reagendar-form" data-reagendar-form style="display:none;">
+            <input type="date" data-reagendar-fecha value="${r.fecha}">
+            <input type="time" data-reagendar-hora value="${r.hora}">
+            <button data-accion="reagendar-guardar">Guardar nuevo horario</button>
           </div>` : '';
 
         card.innerHTML = `
@@ -479,12 +574,14 @@
               '<b>' + r.servicio + '</b> · ' + r.sucursal + (r.telefono ? ' · ' + r.telefono : '') + (r.email ? ' · ' + r.email : '')}
           </p>
           ${accionesHtml}
+          ${reagendarHtml}
           ${notaHtml}
         `;
 
         card.querySelectorAll('[data-accion]').forEach(btn => {
           btn.addEventListener('click', function () {
             const accion = btn.dataset.accion;
+
             if (accion === 'nota') {
               const valor = card.querySelector('[data-nota-input]').value;
               btn.disabled = true; btn.textContent = 'Guardando...';
@@ -494,13 +591,27 @@
                 .guardarNota(TOKEN, r.fila, valor);
               return;
             }
-            if (accion === 'liberar') {
-              google.script.run
-                .withSuccessHandler(cargarReservas)
-                .withFailureHandler(function (err) { if (!manejarSesionExpirada_(err)) alert(err.message); })
-                .liberarBloqueo(TOKEN, r.fila);
+
+            if (accion === 'reagendar-toggle') {
+              const form = card.querySelector('[data-reagendar-form]');
+              form.style.display = form.style.display === 'none' ? 'flex' : 'none';
               return;
             }
+
+            if (accion === 'reagendar-guardar') {
+              const nuevaFecha = card.querySelector('[data-reagendar-fecha]').value;
+              const nuevaHora = card.querySelector('[data-reagendar-hora]').value;
+              btn.disabled = true; btn.textContent = 'Guardando...';
+              google.script.run
+                .withSuccessHandler(function () { cargarReservas(); })
+                .withFailureHandler(function (err) {
+                  btn.disabled = false; btn.textContent = 'Guardar nuevo horario';
+                  if (!manejarSesionExpirada_(err)) alert(err.message);
+                })
+                .reagendarReserva(TOKEN, r.fila, nuevaFecha, nuevaHora);
+              return;
+            }
+
             google.script.run
               .withSuccessHandler(cargarReservas)
               .withFailureHandler(function (err) { if (!manejarSesionExpirada_(err)) alert(err.message); })
@@ -512,101 +623,131 @@
       });
     }
 
-    // ---------- Bloquear horario ----------
+    document.getElementById('filtroProfesional').addEventListener('change', pintarReservasFiltradas);
+    document.getElementById('filtroSucursal').addEventListener('change', pintarReservasFiltradas);
 
-    function cargarSucursalesBloqueo() {
-      google.script.run
-        .withSuccessHandler(function (info) {
-          const sel = document.getElementById('bSucursal');
-          sel.innerHTML = '<option value="">Selecciona una sucursal</option>' +
-            info.sucursales.map(s => `<option value="${s}">${s}</option>`).join('');
-          document.getElementById('bFecha').min = new Date().toISOString().slice(0, 10);
-        })
-        .getInfoPublica();
+    // ---------- Abrir agenda ----------
+
+    function rolObjetivoAbrir_() {
+      return ROL === 'admin' ? document.getElementById('aProfesional').value : ROL;
     }
 
-    function cargarHorariosBloqueo() {
-      const fecha = document.getElementById('bFecha').value;
-      const sucursal = document.getElementById('bSucursal').value;
-      const cont = document.getElementById('bSlots');
-      const hint = document.getElementById('bHint');
-      horaBloqueoSeleccionada = null;
-      document.getElementById('bloquearBtn').disabled = true;
-      cont.innerHTML = '';
+    function cargarEstadoDia() {
+      const fecha = document.getElementById('aFecha').value;
+      const sucursal = document.getElementById('aSucursal').value;
+      const rol = rolObjetivoAbrir_();
+      const hint = document.getElementById('aHint');
+      document.getElementById('aSlots').innerHTML = '';
+      document.getElementById('aMsg').className = 'msg';
 
-      if (!fecha || !sucursal) {
-        hint.textContent = 'Elige sucursal y fecha para ver horarios.';
+      if (!fecha || !sucursal || (ROL === 'admin' && !rol)) {
+        hint.textContent = ROL === 'admin'
+          ? 'Elige profesional, sucursal y fecha para ver los horarios.'
+          : 'Elige sucursal y fecha para ver los horarios.';
         return;
       }
-      hint.textContent = 'Buscando horarios...';
+      hint.textContent = 'Cargando...';
 
       google.script.run
-        .withSuccessHandler(function (slots) {
-          cont.innerHTML = '';
-          if (!slots.length) {
-            hint.textContent = 'No hay horarios libres ese día.';
-            return;
-          }
-          hint.textContent = '';
-          slots.forEach(h => {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'slot-btn';
-            b.textContent = h;
-            b.onclick = function () {
-              document.querySelectorAll('#bSlots .slot-btn').forEach(x => x.classList.remove('selected'));
-              b.classList.add('selected');
-              horaBloqueoSeleccionada = h;
-              document.getElementById('bloquearBtn').disabled = false;
-            };
-            cont.appendChild(b);
-          });
-        })
+        .withSuccessHandler(pintarSlotsAbrir)
         .withFailureHandler(function (err) {
           if (manejarSesionExpirada_(err)) return;
           hint.textContent = 'No se pudo cargar: ' + err.message;
         })
-        .getHorariosDisponibles(fecha, sucursal, ROL);
+        .getEstadoDia(TOKEN, { fecha: fecha, sucursal: sucursal, rol: rol });
     }
 
-    document.getElementById('bFecha').addEventListener('change', cargarHorariosBloqueo);
-    document.getElementById('bSucursal').addEventListener('change', cargarHorariosBloqueo);
+    function pintarSlotsAbrir(estado) {
+      const cont = document.getElementById('aSlots');
+      const hint = document.getElementById('aHint');
+      cont.innerHTML = '';
 
-    document.getElementById('bloquearBtn').addEventListener('click', function () {
+      if (!estado.horasBase.length) {
+        hint.textContent = 'No hay horas configuradas (revisa Hora de inicio/término en la pestaña Config).';
+        return;
+      }
+      hint.textContent = 'Verde = abierto para pacientes · Gris = cerrado. Click en una hora para abrirla o cerrarla.';
+
+      estado.horasBase.forEach(h => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'slot-btn';
+
+        const reservado = estado.ocupadas.indexOf(h) !== -1;
+        const abierto = estado.abiertas.indexOf(h) !== -1;
+
+        if (reservado) {
+          b.classList.add('reservado');
+          b.textContent = h + ' · reservado';
+          b.disabled = true;
+        } else if (abierto) {
+          b.classList.add('abierto');
+          b.textContent = h + ' · abierto';
+          b.onclick = function () { toggleSlotAbrir_(h, 'cerrarHorario'); };
+        } else {
+          b.textContent = h;
+          b.onclick = function () { toggleSlotAbrir_(h, 'abrirHorario'); };
+        }
+
+        cont.appendChild(b);
+      });
+    }
+
+    function toggleSlotAbrir_(hora, funcion) {
+      const datos = {
+        fecha: document.getElementById('aFecha').value,
+        hora: hora,
+        sucursal: document.getElementById('aSucursal').value,
+        rol: rolObjetivoAbrir_()
+      };
+      google.script.run
+        .withSuccessHandler(function () { cargarEstadoDia(); })
+        .withFailureHandler(function (err) {
+          if (manejarSesionExpirada_(err)) return;
+          const msg = document.getElementById('aMsg');
+          msg.className = 'msg err';
+          msg.textContent = err.message;
+        })
+        [funcion](TOKEN, datos);
+    }
+
+    document.getElementById('aFecha').addEventListener('change', cargarEstadoDia);
+    document.getElementById('aSucursal').addEventListener('change', cargarEstadoDia);
+    document.getElementById('aProfesional').addEventListener('change', cargarEstadoDia);
+
+    document.getElementById('abrirDiaBtn').addEventListener('click', function () {
+      const fecha = document.getElementById('aFecha').value;
+      const sucursal = document.getElementById('aSucursal').value;
+      const rol = rolObjetivoAbrir_();
+      const msg = document.getElementById('aMsg');
+
+      if (!fecha || !sucursal || (ROL === 'admin' && !rol)) {
+        msg.className = 'msg err';
+        msg.textContent = 'Elige profesional (si corresponde), sucursal y fecha primero.';
+        return;
+      }
+
       const btn = this;
-      const msg = document.getElementById('bMsg');
-      msg.className = 'msg';
       btn.disabled = true;
-      btn.textContent = 'Bloqueando...';
+      btn.textContent = 'Abriendo...';
+      msg.className = 'msg';
 
       google.script.run
         .withSuccessHandler(function (res) {
-          btn.textContent = 'Bloquear horario';
-          if (res.ok) {
-            msg.className = 'msg ok';
-            msg.textContent = res.mensaje;
-            document.getElementById('bMotivo').value = '';
-            cargarHorariosBloqueo();
-            cargarReservas();
-          } else {
-            msg.className = 'msg err';
-            msg.textContent = res.mensaje;
-            btn.disabled = false;
-          }
+          btn.disabled = false;
+          btn.textContent = 'Abrir todo el día';
+          msg.className = 'msg ok';
+          msg.textContent = res.mensaje;
+          cargarEstadoDia();
         })
         .withFailureHandler(function (err) {
           btn.disabled = false;
-          btn.textContent = 'Bloquear horario';
+          btn.textContent = 'Abrir todo el día';
           if (manejarSesionExpirada_(err)) return;
           msg.className = 'msg err';
-          msg.textContent = 'Error: ' + err.message;
+          msg.textContent = err.message;
         })
-        .bloquearHorario(TOKEN, {
-          fecha: document.getElementById('bFecha').value,
-          hora: horaBloqueoSeleccionada,
-          sucursal: document.getElementById('bSucursal').value,
-          motivo: document.getElementById('bMotivo').value
-        });
+        .abrirDiaCompleto(TOKEN, { fecha: fecha, sucursal: sucursal, rol: rol });
     });
   </script>
 </body>
