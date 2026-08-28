@@ -473,11 +473,11 @@
 
             const selProf = document.getElementById('aProfesional');
             selProf.innerHTML = '<option value="">Selecciona profesional</option>' +
-              (info.profesionales || []).map(p => '<option value="' + p.rol + '">' + p.nombre + ' (' + p.rol + ')</option>').join('');
+              (info.profesionales || []).map(p => '<option value="' + p.usuario + '">' + p.nombre + ' (' + p.rol + ')</option>').join('');
 
             const filtroProf = document.getElementById('filtroProfesional');
             filtroProf.innerHTML = '<option value="">Todos los profesionales</option>' +
-              (info.profesionales || []).map(p => '<option value="' + p.rol + '">' + p.nombre + '</option>').join('');
+              (info.profesionales || []).map(p => '<option value="' + p.usuario + '">' + p.nombre + '</option>').join('');
 
             const filtroSuc = document.getElementById('filtroSucursal');
             filtroSuc.innerHTML = '<option value="">Todas las sucursales</option>' +
@@ -565,13 +565,13 @@
 
         card.innerHTML = `
           <div class="reserva-top">
-            <span class="reserva-fecha"><b>${r.fecha}</b> · ${r.hora}${ROL === 'admin' && r.profesional ? ' · ' + r.profesional : ''}</span>
+            <span class="reserva-fecha"><b>${r.fecha}</b> · ${r.hora}${ROL === 'admin' && r.profesionalNombre ? ' · ' + r.profesionalNombre : ''}</span>
             <span class="pill ${r.estado}">${r.estado}</span>
           </div>
           <p class="reserva-nombre">${tituloNombre}</p>
           <p class="reserva-detalle">
             ${esBloqueo ? (r.nota ? '<b>Motivo:</b> ' + r.nota : 'Sin motivo indicado') :
-              '<b>' + r.servicio + '</b> · ' + r.sucursal + (r.telefono ? ' · ' + r.telefono : '') + (r.email ? ' · ' + r.email : '')}
+              '<b>' + r.servicio + '</b>' + (r.tipoAtencion ? ' (' + r.tipoAtencion + ')' : '') + ' · ' + r.sucursal + (r.telefono ? ' · ' + r.telefono : '') + (r.email ? ' · ' + r.email : '')}
           </p>
           ${accionesHtml}
           ${reagendarHtml}
@@ -654,7 +654,7 @@
           if (manejarSesionExpirada_(err)) return;
           hint.textContent = 'No se pudo cargar: ' + err.message;
         })
-        .getEstadoDia(TOKEN, { fecha: fecha, sucursal: sucursal, rol: rol });
+        .getEstadoDia(TOKEN, { fecha: fecha, sucursal: sucursal, profesional: rol });
     }
 
     function pintarSlotsAbrir(estado) {
@@ -698,7 +698,7 @@
         fecha: document.getElementById('aFecha').value,
         hora: hora,
         sucursal: document.getElementById('aSucursal').value,
-        rol: rolObjetivoAbrir_()
+        profesional: rolObjetivoAbrir_()
       };
       google.script.run
         .withSuccessHandler(function () { cargarEstadoDia(); })
@@ -747,7 +747,7 @@
           msg.className = 'msg err';
           msg.textContent = err.message;
         })
-        .abrirDiaCompleto(TOKEN, { fecha: fecha, sucursal: sucursal, rol: rol });
+        .abrirDiaCompleto(TOKEN, { fecha: fecha, sucursal: sucursal, profesional: rol });
     });
   </script>
 </body>

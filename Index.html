@@ -185,6 +185,19 @@
       <label for="servicio">Servicio</label>
       <select id="servicio" required><option value="">Cargando...</option></select>
 
+      <div id="profesionalWrap" style="display:none;">
+        <label for="profesional">Profesional</label>
+        <select id="profesional"><option value="">Selecciona profesional</option></select>
+      </div>
+
+      <div id="tipoAtencionWrap" style="display:none;">
+        <label for="tipoAtencion">Tipo de atención</label>
+        <select id="tipoAtencion">
+          <option value="Presencial">Presencial</option>
+          <option value="Online">Online</option>
+        </select>
+      </div>
+
       <label for="sucursal">Sucursal</label>
       <select id="sucursal" required><option value="">Cargando...</option></select>
 
@@ -204,17 +217,19 @@
 
   <script>
     let horaSeleccionada = null;
+    let serviciosInfo = [];
 
     google.script.run
       .withSuccessHandler(function (info) {
         document.getElementById('titulo').innerHTML = 'Reservar hora — <span>' + info.nombreCentro + '</span>';
 
+        serviciosInfo = info.servicios || [];
         const sel = document.getElementById('servicio');
-        if (!info.servicios || !info.servicios.length) {
+        if (!serviciosInfo.length) {
           sel.innerHTML = '<option value="">No hay servicios configurados</option>';
         } else {
           sel.innerHTML = '<option value="">Selecciona un servicio</option>' +
-            info.servicios.map(s => `<option value="${s}">${s}</option>`).join('');
+            serviciosInfo.map(s => `<option value="${s.servicio}">${s.servicio}</option>`).join('');
         }
 
         const selSucursal = document.getElementById('sucursal');
@@ -241,19 +256,56 @@
 
     document.getElementById('fecha').addEventListener('change', cargarHorarios);
     document.getElementById('sucursal').addEventListener('change', cargarHorarios);
-    document.getElementById('servicio').addEventListener('change', cargarHorarios);
+    document.getElementById('servicio').addEventListener('change', function () {
+      actualizarCamposServicio();
+      cargarHorarios();
+    });
+    document.getElementById('profesional').addEventListener('change', cargarHorarios);
+
+    function servicioSeleccionadoInfo_() {
+      const servicio = document.getElementById('servicio').value;
+      return serviciosInfo.find(s => s.servicio === servicio) || null;
+    }
+
+    // Muestra/oculta "Profesional" (solo si hay más de uno activo para
+    // ese servicio) y "Tipo de atención" (solo para servicios de
+    // nutrición), y llena las opciones de profesional según corresponda.
+    function actualizarCamposServicio() {
+      const info = servicioSeleccionadoInfo_();
+      const wrapProf = document.getElementById('profesionalWrap');
+      const selProf = document.getElementById('profesional');
+      const wrapTipo = document.getElementById('tipoAtencionWrap');
+
+      if (info && info.requiereProfesional) {
+        wrapProf.style.display = 'block';
+        selProf.required = true;
+        selProf.innerHTML = '<option value="">Selecciona profesional</option>' +
+          info.profesionales.map(p => `<option value="${p.usuario}">${p.nombre}</option>`).join('');
+      } else {
+        wrapProf.style.display = 'none';
+        selProf.required = false;
+        selProf.value = '';
+      }
+
+      wrapTipo.style.display = (info && info.requiereTipoAtencion) ? 'block' : 'none';
+    }
 
     function cargarHorarios() {
       const fecha = document.getElementById('fecha').value;
       const sucursal = document.getElementById('sucursal').value;
       const servicio = document.getElementById('servicio').value;
+      const info = servicioSeleccionadoInfo_();
+      const profesional = (info && info.requiereProfesional) ? document.getElementById('profesional').value : '';
       const cont = document.getElementById('slots');
       const hint = document.getElementById('slotsHint');
       horaSeleccionada = null;
       actualizarBotonEnvio();
       cont.innerHTML = '';
-      if (!fecha || !sucursal || !servicio) {
-        hint.textContent = 'Elige servicio, sucursal y fecha para ver los horarios disponibles.';
+
+      if (!fecha || !sucursal || !servicio || (info && info.requiereProfesional && !profesional)) {
+        hint.textContent = (info && info.requiereProfesional)
+          ? 'Elige servicio, profesional, sucursal y fecha para ver los horarios disponibles.'
+          : 'Elige servicio, sucursal y fecha para ver los horarios disponibles.';
         return;
       }
 
@@ -284,7 +336,7 @@
         .withFailureHandler(function (err) {
           hint.textContent = 'No se pudo cargar el horario: ' + err.message;
         })
-        .getHorariosDisponibles(fecha, sucursal, servicio);
+        .getHorariosDisponibles(fecha, sucursal, servicio, profesional);
     }
 
     function actualizarBotonEnvio() {
@@ -303,6 +355,7 @@
       btn.disabled = true;
       btn.textContent = 'Enviando...';
 
+      const infoServicio = servicioSeleccionadoInfo_();
       const datos = {
         nombre: document.getElementById('nombre').value,
         email: document.getElementById('email').value,
@@ -310,7 +363,9 @@
         servicio: document.getElementById('servicio').value,
         sucursal: document.getElementById('sucursal').value,
         fecha: document.getElementById('fecha').value,
-        hora: horaSeleccionada
+        hora: horaSeleccionada,
+        profesional: (infoServicio && infoServicio.requiereProfesional) ? document.getElementById('profesional').value : '',
+        tipoAtencion: (infoServicio && infoServicio.requiereTipoAtencion) ? document.getElementById('tipoAtencion').value : ''
       };
 
       google.script.run

@@ -55,9 +55,9 @@ function avisar_(mensaje) {
 const COL = {
   TIMESTAMP: 1, NOMBRE: 2, EMAIL: 3, TELEFONO: 4, SERVICIO: 5,
   FECHA: 6, HORA: 7, ESTADO: 8, RECORDATORIO: 9, SUCURSAL: 10,
-  PROFESIONAL: 11, NOTA: 12
+  PROFESIONAL: 11, NOTA: 12, TIPO_ATENCION: 13
 };
-const NUM_COLS = 12;
+const NUM_COLS = 13;
 
 const SHEET_SERVICIOS = 'Servicios';
 const SHEET_USUARIOS = 'Usuarios';
@@ -84,7 +84,7 @@ function configurarHojas() {
   reservas.getRange(1, 1, 1, NUM_COLS).setValues([[
     'Marca temporal', 'Nombre', 'Email', 'Teléfono', 'Servicio',
     'Fecha', 'Hora', 'Estado', 'Recordatorio enviado', 'Sucursal',
-    'Profesional', 'Nota'
+    'Profesional', 'Nota', 'Tipo de atención'
   ]]);
   reservas.setFrozenRows(1);
   reservas.autoResizeColumns(1, NUM_COLS);
@@ -221,6 +221,18 @@ function agregarHojaDisponibilidad() {
   avisar_('Listo: se agregó la pestaña "Disponibilidad". Ahora rosi y kin deben abrir sus horarios desde el dashboard antes de que los pacientes puedan reservarlos.');
 }
 
+// Agrega la columna "Tipo de atención" (presencial/online, solo se usa
+// para servicios de nutrición) a un proyecto que YA tiene reservas
+// guardadas, sin borrar nada. Ejecútala una sola vez.
+function agregarColumnaTipoAtencion() {
+  const ss = getSpreadsheet_();
+  const reservas = ss.getSheetByName(SHEET_RESERVAS);
+  if (reservas.getRange(1, COL.TIPO_ATENCION).getValue() !== 'Tipo de atención') {
+    reservas.getRange(1, COL.TIPO_ATENCION).setValue('Tipo de atención');
+  }
+  avisar_('Listo: agregué la columna "Tipo de atención" en Reservas.');
+}
+
 // Crea o actualiza un usuario del dashboard. Ejecútala UNA VEZ POR CADA
 // profesional, cambiando los valores de abajo antes de correrla. Vuelve a
 // dejar el código como estaba (o simplemente ignóralo) después de crear
@@ -341,12 +353,39 @@ function normalizarHora_(valor, porDefecto, zona) {
   return String(valor);
 }
 
+// Servicios con su rol y, si corresponde, la lista de profesionales entre
+// los que el paciente debe elegir (solo cuando hay más de uno activo para
+// ese rol — así hoy aparece para nutrición, con kinesiología queda igual
+// que antes, y si mañana hay dos kinesiólogos aparece ahí también, sin
+// tocar el formulario).
+function getServiciosPublicos_() {
+  const hoja = getSpreadsheet_().getSheetByName(SHEET_SERVICIOS);
+  if (hoja && hoja.getLastRow() >= 2) {
+    const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, 2).getValues();
+    return filas.filter(f => f[0]).map(f => {
+      const rol = f[1];
+      const profesionales = getProfesionalesPorRol_(rol);
+      return {
+        servicio: f[0],
+        rol: rol,
+        requiereProfesional: profesionales.length > 1,
+        requiereTipoAtencion: rol === 'nutricionista',
+        profesionales: profesionales,
+      };
+    });
+  }
+  // Respaldo si la hoja "Servicios" no existe: lista plana desde Config.
+  return getConfigMap_().servicios.map(s => ({
+    servicio: s, rol: '', requiereProfesional: false, requiereTipoAtencion: false, profesionales: [],
+  }));
+}
+
 // Expuesto al formulario web (sin datos internos sensibles)
 function getInfoPublica() {
   const cfg = getConfigMap_();
   return {
     nombreCentro: cfg.nombreCentro,
-    servicios: cfg.servicios,
+    servicios: getServiciosPublicos_(),
     sucursales: cfg.sucursales,
     diasAnticipacion: cfg.diasAnticipacion,
     zona: cfg.zona,
@@ -429,6 +468,44 @@ function getRolServicio_(servicio) {
   return fila ? fila[1] : '';
 }
 
+// Profesionales activos (usuarios del dashboard) para un rol dado
+// ('nutricionista' o 'kinesiologo'). Permite que un mismo rol tenga más
+// de un profesional (ej. dos nutricionistas), cada uno con su propia
+// agenda — y que se puedan agregar más cuando haga falta, sin tocar código.
+function getProfesionalesPorRol_(rol) {
+  const hoja = getSpreadsheet_().getSheetByName(SHEET_USUARIOS);
+  if (!hoja || hoja.getLastRow() < 2) return [];
+  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, 5).getValues();
+  return filas
+    .filter(f => f[2] === rol && f[4] !== 'No')
+    .map(f => ({ usuario: f[0], nombre: f[3] }));
+}
+
+// Nombre para mostrar de un profesional, a partir de su usuario de login.
+function nombrePorUsuario_(usuario) {
+  if (!usuario) return '';
+  const hoja = getSpreadsheet_().getSheetByName(SHEET_USUARIOS);
+  if (!hoja || hoja.getLastRow() < 2) return '';
+  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, 4).getValues();
+  const fila = filas.find(f => f[0] === usuario);
+  return fila ? fila[3] : '';
+}
+
+// Resuelve a qué profesional concreto (usuario) corresponde una reserva:
+// si el rol solo tiene un profesional activo, se asigna automáticamente
+// (comportamiento actual, sin cambios visibles); si tiene más de uno, el
+// paciente debe haber elegido uno válido.
+function resolverProfesionalReserva_(rol, profesionalSolicitado) {
+  const activos = getProfesionalesPorRol_(rol);
+  if (!activos.length) {
+    throw new Error('No hay profesionales activos para este servicio. Contacta al centro.');
+  }
+  if (activos.length === 1) return activos[0].usuario;
+  const encontrado = activos.find(p => p.usuario === profesionalSolicitado);
+  if (!encontrado) throw new Error('Selecciona con qué profesional quieres la hora.');
+  return encontrado.usuario;
+}
+
 // Lista de horas "de plantilla" del día (09:00, 09:45, 10:30...) según
 // la duración de cita y el rango horaInicio–horaTermino de Config. Es
 // solo la grilla de referencia que usa el dashboard para ofrecer horas
@@ -448,28 +525,35 @@ function getHorasBase_(cfg) {
 }
 
 // Horas que el profesional (o el admin a su nombre) abrió a mano para
-// esa fecha/sucursal — ver hoja "Disponibilidad".
-function getHorasAbiertas_(fechaStr, sucursal, rol) {
+// esa fecha/sucursal — ver hoja "Disponibilidad". "profesional" es el
+// usuario de login (ej. 'rosi', 'catalina', 'kin'): cada profesional
+// tiene su propia agenda, aunque compartan el mismo rol.
+function getHorasAbiertas_(fechaStr, sucursal, profesional) {
   const sheet = getSpreadsheet_().getSheetByName(SHEET_DISPONIBILIDAD);
   if (!sheet) return [];
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
   const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
   return data
-    .filter(row => row[0] === fechaStr && row[2] === sucursal && row[3] === rol)
+    .filter(row => row[0] === fechaStr && row[2] === sucursal && row[3] === profesional)
     .map(row => row[1]);
 }
 
 // Acepta como tercer parámetro un nombre de servicio (lo normal, desde el
-// formulario de pacientes) O directamente un rol (lo que usa el
-// dashboard al abrir/cerrar horarios). Si no encuentra el servicio en la
-// hoja "Servicios", asume que ya le pasaron el rol tal cual.
+// formulario de pacientes) O directamente un usuario de profesional (lo
+// que usa el dashboard al abrir/cerrar horarios, y reagendarReserva). Si
+// no encuentra el servicio en la hoja "Servicios", asume que ya le
+// pasaron el profesional tal cual. Cuando viene de un servicio real y ese
+// rol tiene más de un profesional activo, se necesita el 4to parámetro
+// (profesionalSolicitado) para saber de cuál de todos se quieren ver las
+// horas.
 //
 // Modelo "cerrado por defecto": un horario solo aparece disponible si
 // alguien lo abrió antes a mano (hoja "Disponibilidad") y todavía no
 // tiene una reserva encima.
-function getHorariosDisponibles(fechaStr, sucursal, servicioORol) {
-  const rol = getRolServicio_(servicioORol) || servicioORol || '';
+function getHorariosDisponibles(fechaStr, sucursal, servicioORol, profesionalSolicitado) {
+  const rol = getRolServicio_(servicioORol);
+  const profesional = rol ? resolverProfesionalReserva_(rol, profesionalSolicitado) : (servicioORol || '');
   const cfg = getConfigMap_();
   const fecha = new Date(fechaStr + 'T00:00:00');
 
@@ -478,10 +562,10 @@ function getHorariosDisponibles(fechaStr, sucursal, servicioORol) {
   limite.setDate(hoy.getDate() + cfg.diasAnticipacion);
   if (fecha < new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate()) || fecha > limite) return [];
 
-  const abiertas = getHorasAbiertas_(fechaStr, sucursal, rol);
+  const abiertas = getHorasAbiertas_(fechaStr, sucursal, profesional);
   if (!abiertas.length) return [];
 
-  const ocupadas = getHorasOcupadas_(fechaStr, sucursal, rol);
+  const ocupadas = getHorasOcupadas_(fechaStr, sucursal, profesional);
   const ahora = new Date();
   const esHoy = fechaStr === Utilities.formatDate(ahora, cfg.zona, 'yyyy-MM-dd');
 
@@ -496,7 +580,7 @@ function getHorariosDisponibles(fechaStr, sucursal, servicioORol) {
   }).sort();
 }
 
-function getHorasOcupadas_(fechaStr, sucursal, rol) {
+function getHorasOcupadas_(fechaStr, sucursal, profesional) {
   const sheet = getSpreadsheet_().getSheetByName(SHEET_RESERVAS);
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
@@ -509,8 +593,8 @@ function getHorasOcupadas_(fechaStr, sucursal, rol) {
       // consideran ocupadas para cualquier sucursal, por seguridad.
       (!row[COL.SUCURSAL - 1] || row[COL.SUCURSAL - 1] === sucursal) &&
       // Lo mismo para "profesional": si no se sabe a quién pertenece
-      // (reservas antiguas), se considera ocupada para cualquier rol.
-      (!row[COL.PROFESIONAL - 1] || row[COL.PROFESIONAL - 1] === rol)
+      // (reservas antiguas), se considera ocupada para cualquier profesional.
+      (!row[COL.PROFESIONAL - 1] || row[COL.PROFESIONAL - 1] === profesional)
     )
     .map(row => row[COL.HORA - 1]);
 }
@@ -530,19 +614,26 @@ function crearReserva(datos) {
       throw new Error('Faltan datos obligatorios.');
     }
 
-    const disponibles = getHorariosDisponibles(datos.fecha, datos.sucursal, datos.servicio);
+    const rol = getRolServicio_(datos.servicio);
+    const profesional = rol ? resolverProfesionalReserva_(rol, datos.profesional) : '';
+
+    const disponibles = getHorariosDisponibles(datos.fecha, datos.sucursal, datos.servicio, datos.profesional);
     if (disponibles.indexOf(datos.hora) === -1) {
       throw new Error('Ese horario ya no está disponible. Por favor elige otro.');
     }
 
-    const rol = getRolServicio_(datos.servicio);
+    const tipoAtencion = rol === 'nutricionista'
+      ? (datos.tipoAtencion === 'Online' ? 'Online' : 'Presencial')
+      : '';
+
     const sheet = getSpreadsheet_().getSheetByName(SHEET_RESERVAS);
     sheet.appendRow([
       new Date(), datos.nombre, datos.email, datos.telefono || '',
       datos.servicio, datos.fecha, datos.hora, 'Confirmada', 'No', datos.sucursal,
-      rol, ''
+      profesional, '', tipoAtencion
     ]);
 
+    datos = Object.assign({}, datos, { profesionalNombre: nombrePorUsuario_(profesional), tipoAtencion: tipoAtencion });
     enviarEmailConfirmacion_(datos, cfg);
 
     return { ok: true, mensaje: 'Tu hora quedó confirmada. Te enviamos un correo con los detalles.' };
@@ -559,6 +650,8 @@ function enviarEmailConfirmacion_(datos, cfg) {
     `Hola ${datos.nombre},\n\n` +
     `Tu hora en ${cfg.nombreCentro} quedó confirmada:\n\n` +
     `  Servicio: ${datos.servicio}\n` +
+    (datos.profesionalNombre ? `  Profesional: ${datos.profesionalNombre}\n` : '') +
+    (datos.tipoAtencion ? `  Tipo de atención: ${datos.tipoAtencion}\n` : '') +
     `  Sucursal: ${datos.sucursal}\n` +
     `  Fecha: ${fechaLegible}\n` +
     `  Hora: ${datos.hora}\n\n` +
@@ -654,10 +747,12 @@ function getMisReservas(token) {
       estado: row[COL.ESTADO - 1],
       sucursal: row[COL.SUCURSAL - 1],
       profesional: row[COL.PROFESIONAL - 1],
+      profesionalNombre: nombrePorUsuario_(row[COL.PROFESIONAL - 1]),
+      tipoAtencion: row[COL.TIPO_ATENCION - 1] || '',
       nota: row[COL.NOTA - 1] || '',
     }))
     .filter(r => r.fecha && r.fecha >= ayerStr)
-    .filter(r => sesion.rol === 'admin' || r.profesional === sesion.rol);
+    .filter(r => sesion.rol === 'admin' || r.profesional === sesion.usuario);
 
   filas.sort((a, b) => (a.fecha + a.hora).localeCompare(b.fecha + b.hora));
 
@@ -668,7 +763,7 @@ function puedeEditarFila_(sesion, fila) {
   if (sesion.rol === 'admin') return true;
   const sheet = getSpreadsheet_().getSheetByName(SHEET_RESERVAS);
   const profesional = sheet.getRange(fila, COL.PROFESIONAL).getValue();
-  return profesional === sesion.rol;
+  return profesional === sesion.usuario;
 }
 
 function actualizarEstado(token, fila, nuevoEstado) {
@@ -738,19 +833,29 @@ function rolProfesionalValido_(rol) {
   return rol === 'nutricionista' || rol === 'kinesiologo';
 }
 
-// El profesional gestiona su propia agenda. El admin puede gestionar la
-// de cualquiera, pero debe indicar explícitamente para cuál (datos.rol).
-function resolverRolObjetivo_(sesion, datos) {
+// Cada profesional (usuario) gestiona su propia agenda, aunque comparta
+// rol con otro (ej. dos nutricionistas). El admin puede gestionar la de
+// cualquiera, pero debe indicar explícitamente de cuál (datos.profesional
+// = usuario de esa persona).
+function resolverProfesionalObjetivo_(sesion, datos) {
   if (sesion.rol === 'admin') {
-    if (!rolProfesionalValido_(datos && datos.rol)) {
-      throw new Error('Indica para qué profesional (nutricionista o kinesiologo).');
+    const usuario = datos && datos.profesional;
+    if (!usuario || !usuarioProfesionalValido_(usuario)) {
+      throw new Error('Indica de qué profesional quieres gestionar la agenda.');
     }
-    return datos.rol;
+    return usuario;
   }
   if (!rolProfesionalValido_(sesion.rol)) {
     throw new Error('Esta cuenta no gestiona una agenda de profesional.');
   }
-  return sesion.rol;
+  return sesion.usuario;
+}
+
+function usuarioProfesionalValido_(usuario) {
+  const hoja = getSpreadsheet_().getSheetByName(SHEET_USUARIOS);
+  if (!hoja || hoja.getLastRow() < 2) return false;
+  const filas = hoja.getRange(2, 1, hoja.getLastRow() - 1, 5).getValues();
+  return filas.some(f => f[0] === usuario && rolProfesionalValido_(f[2]) && f[4] !== 'No');
 }
 
 function validarFechaGestionable_(cfg, fechaStr) {
@@ -778,14 +883,12 @@ function getInfoDashboard(token) {
   if (sesion.rol === 'admin') {
     const hoja = getSpreadsheet_().getSheetByName(SHEET_USUARIOS);
     const lastRow = hoja.getLastRow();
-    const vistos = {};
     const profesionales = [];
     if (lastRow >= 2) {
       hoja.getRange(2, 1, lastRow - 1, 5).getValues().forEach(row => {
-        const [ , , rol, nombre, activo] = row;
-        if (rolProfesionalValido_(rol) && activo !== 'No' && !vistos[rol]) {
-          vistos[rol] = true;
-          profesionales.push({ rol, nombre });
+        const [usuario, , rol, nombre, activo] = row;
+        if (rolProfesionalValido_(rol) && activo !== 'No') {
+          profesionales.push({ usuario, rol, nombre });
         }
       });
     }
@@ -801,14 +904,14 @@ function getInfoDashboard(token) {
 function getEstadoDia(token, datos) {
   const sesion = validarToken_(token);
   if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-  const rol = resolverRolObjetivo_(sesion, datos);
+  const profesional = resolverProfesionalObjetivo_(sesion, datos);
   if (!datos || !datos.fecha || !datos.sucursal) throw new Error('Faltan datos.');
 
   const cfg = getConfigMap_();
   return {
     horasBase: getHorasBase_(cfg),
-    abiertas: getHorasAbiertas_(datos.fecha, datos.sucursal, rol),
-    ocupadas: getHorasOcupadas_(datos.fecha, datos.sucursal, rol)
+    abiertas: getHorasAbiertas_(datos.fecha, datos.sucursal, profesional),
+    ocupadas: getHorasOcupadas_(datos.fecha, datos.sucursal, profesional)
   };
 }
 
@@ -816,7 +919,7 @@ function getEstadoDia(token, datos) {
 function abrirHorario(token, datos) {
   const sesion = validarToken_(token);
   if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-  const rol = resolverRolObjetivo_(sesion, datos);
+  const profesional = resolverProfesionalObjetivo_(sesion, datos);
 
   if (!datos.fecha || !datos.hora || !datos.sucursal) {
     throw new Error('Faltan datos para abrir el horario.');
@@ -828,13 +931,13 @@ function abrirHorario(token, datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, rol);
+    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, profesional);
     if (yaAbiertas.indexOf(datos.hora) !== -1) {
       return { ok: true, mensaje: 'Ese horario ya estaba abierto.' };
     }
 
     crearHojaDisponibilidad_(getSpreadsheet_()).appendRow([
-      datos.fecha, datos.hora, datos.sucursal, rol, sesion.usuario, new Date()
+      datos.fecha, datos.hora, datos.sucursal, profesional, sesion.usuario, new Date()
     ]);
 
     return { ok: true, mensaje: 'Horario abierto.' };
@@ -848,7 +951,7 @@ function abrirHorario(token, datos) {
 function abrirDiaCompleto(token, datos) {
   const sesion = validarToken_(token);
   if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-  const rol = resolverRolObjetivo_(sesion, datos);
+  const profesional = resolverProfesionalObjetivo_(sesion, datos);
 
   if (!datos.fecha || !datos.sucursal) throw new Error('Faltan datos.');
 
@@ -859,7 +962,7 @@ function abrirDiaCompleto(token, datos) {
   lock.waitLock(15000);
   try {
     const base = getHorasBase_(cfg);
-    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, rol);
+    const yaAbiertas = getHorasAbiertas_(datos.fecha, datos.sucursal, profesional);
     const nuevas = base.filter(h => yaAbiertas.indexOf(h) === -1);
 
     if (!nuevas.length) {
@@ -867,7 +970,7 @@ function abrirDiaCompleto(token, datos) {
     }
 
     const sheet = crearHojaDisponibilidad_(getSpreadsheet_());
-    const filas = nuevas.map(h => [datos.fecha, h, datos.sucursal, rol, sesion.usuario, new Date()]);
+    const filas = nuevas.map(h => [datos.fecha, h, datos.sucursal, profesional, sesion.usuario, new Date()]);
     sheet.getRange(sheet.getLastRow() + 1, 1, filas.length, 6).setValues(filas);
 
     return { ok: true, mensaje: 'Se abrieron ' + nuevas.length + ' horarios.', abiertos: nuevas.length };
@@ -880,7 +983,7 @@ function abrirDiaCompleto(token, datos) {
 function cerrarHorario(token, datos) {
   const sesion = validarToken_(token);
   if (!sesion) throw new Error('Tu sesión expiró. Vuelve a iniciar sesión.');
-  const rol = resolverRolObjetivo_(sesion, datos);
+  const profesional = resolverProfesionalObjetivo_(sesion, datos);
 
   if (!datos.fecha || !datos.hora || !datos.sucursal) {
     throw new Error('Faltan datos para cerrar el horario.');
@@ -889,7 +992,7 @@ function cerrarHorario(token, datos) {
   const lock = LockService.getScriptLock();
   lock.waitLock(15000);
   try {
-    const ocupadas = getHorasOcupadas_(datos.fecha, datos.sucursal, rol);
+    const ocupadas = getHorasOcupadas_(datos.fecha, datos.sucursal, profesional);
     if (ocupadas.indexOf(datos.hora) !== -1) {
       throw new Error('Ese horario ya tiene una reserva — cancélala primero desde "Mis horas" o "Agenda general".');
     }
@@ -900,7 +1003,7 @@ function cerrarHorario(token, datos) {
       const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
       for (let i = data.length - 1; i >= 0; i--) {
         if (data[i][0] === datos.fecha && data[i][1] === datos.hora &&
-            data[i][2] === datos.sucursal && data[i][3] === rol) {
+            data[i][2] === datos.sucursal && data[i][3] === profesional) {
           sheet.deleteRow(i + 2);
           return { ok: true, mensaje: 'Horario cerrado.' };
         }
