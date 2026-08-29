@@ -246,6 +246,7 @@
         limite.setDate(hoy.getDate() + info.diasAnticipacion);
         fechaInput.min = hoy.toISOString().slice(0, 10);
         fechaInput.max = limite.toISOString().slice(0, 10);
+        fechaInput.value = hoy.toISOString().slice(0, 10);
       })
       .withFailureHandler(function (err) {
         document.getElementById('servicio').innerHTML = '<option value="">Error al cargar</option>';

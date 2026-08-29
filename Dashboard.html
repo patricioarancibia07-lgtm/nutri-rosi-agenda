@@ -467,6 +467,7 @@
           selSuc.innerHTML = '<option value="">Selecciona una sucursal</option>' +
             info.sucursales.map(s => '<option value="' + s + '">' + s + '</option>').join('');
           document.getElementById('aFecha').min = new Date().toISOString().slice(0, 10);
+          document.getElementById('aFecha').value = new Date().toISOString().slice(0, 10);
 
           if (ROL === 'admin') {
             document.getElementById('abrirProfesionalWrap').style.display = 'block';
